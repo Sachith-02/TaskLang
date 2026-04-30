@@ -1,0 +1,2 @@
+TASK emptyBody {
+}

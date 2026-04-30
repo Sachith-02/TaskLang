@@ -1,32 +1,358 @@
 # TaskLang++
 
-> A domain-specific language for task scheduling and automation
+TaskLang++ is a small domain-specific language for task scheduling and automation workflows. It was built for the SE2052 Programming Paradigms assignment using Flex for lexical analysis and Bison for parsing.
 
-![Build](https://img.shields.io/badge/build-passing-brightgreen)
-![Language](https://img.shields.io/badge/language-C-blue)
-![Tools](https://img.shields.io/badge/tools-Flex%20%2B%20Bison-lightgrey)
-![Tests](https://img.shields.io/badge/tests-20%2F20-yellow)
-![License](https://img.shields.io/badge/license-MIT-lightgrey)
+The language lets a user describe tasks, script commands, time or event schedules, dependencies, and simple success/failure conditions. The interpreter validates the program and simulates the order in which tasks would execute. It does not run real operating-system commands.
 
-TaskLang++ is a declarative, formally-defined DSL for expressing task scheduling workflows. It supports time-based scheduling, inter-task dependencies, and conditional execution — compiled via a Flex lexer and Bison parser into a validated execution plan.
+## Project Overview
 
----
+TaskLang++ focuses on a common automation pattern:
 
-## Features
+> Run this script at this time or event, but only after the required tasks have completed.
 
-- **Time-based scheduling** — `EVERY DAY`, `EVERY WEEK ON <day>`, or one-shot `AT HH:MM` with lexer-level time validation
-- **Task dependencies** — `AFTER` / `BEFORE` / `DEPENDS` with circular dependency detection (DFS)
-- **Conditional execution** — `IF success` / `IF failure` guards on downstream tasks
-- **Semantic validation** — duplicate names, undefined dependencies, and cycles caught at parse time
-- **Topological execution** — tasks execute in correct dependency order (Kahn's algorithm)
-- **Helpful errors** — line-numbered lexical, syntax, and semantic error messages
+The project demonstrates:
 
----
+- DSL scope definition for task scheduling and automation
+- tokenization with Flex
+- grammar design with Bison
+- syntax validation and semantic validation
+- dependency graph handling
+- automated testing with valid and invalid programs
+- readable output for accepted programs and clear errors for rejected programs
 
-## Example
+## Assignment Mapping
 
+| Rubric Area | How TaskLang++ Addresses It |
+| --- | --- |
+| DSL Design | Defines a focused scheduling language with readable task, schedule, dependency, and condition syntax. |
+| Grammar | Provides EBNF and BNF grammar for all supported constructs. |
+| Lexer | Uses Flex rules for keywords, identifiers, strings, valid/invalid times, comments, and lexical errors. |
+| Parser | Uses Bison rules for task definitions, statements, schedules, dependencies, and conditions. |
+| Integration and Execution | Builds with `make`, validates programs, resolves dependencies, and prints simulated execution order. |
+| Testing | Includes 15 valid tests and 22 invalid tests, plus `make test` and `run_tests.py`. |
+| Reflection | Report draft explains design trade-offs, parser conflicts, semantic validation, and future work. |
+
+## DSL Scope
+
+Supported task features:
+
+- named task definitions using `TASK name { ... }`
+- exactly one `RUN "script"` statement per task
+- optional time-based schedule
+- optional event-based schedule
+- dependencies between tasks
+- optional `IF success` or `IF failure` condition
+
+Supported schedules:
+
+- `EVERY DAY`
+- `EVERY DAY AT HH:MM`
+- `EVERY WEEK ON <DAY> AT HH:MM`
+- `AT HH:MM`
+- `WHEN <eventName>`
+
+Supported dependencies:
+
+- `AFTER taskName`
+- `BEFORE taskName`
+- `DEPENDS taskName`
+- `DEPENDS ON taskName`
+
+Supported conditions:
+
+- `IF success`
+- `IF failure`
+
+Design assumptions:
+
+- Every task must have exactly one `RUN`.
+- A task may have at most one schedule.
+- A task may have at most one condition.
+- A condition must refer to a task dependency, so conditional tasks need at least one dependency.
+- `BEFORE B` means task `B` depends on the current task.
+- Scripts are printed for simulation only; they are not executed.
+
+## Why a DSL Is Useful for Task Scheduling
+
+Task scheduling has a small, repeated vocabulary: task names, scripts, times, events, dependencies, and success or failure conditions. A DSL makes this domain easier to read than a general-purpose program with many function calls or configuration objects.
+
+For example:
+
+```tl
+TASK sendReport {
+    RUN "report.py"
+    AFTER backupDB
+    IF success
+}
 ```
-# Daily backup pipeline
+
+This says directly what the workflow means. The compiler can also catch domain-specific mistakes such as invalid times, missing scripts, duplicate schedules, undefined dependencies, and circular workflows.
+
+## Token Table
+
+| Token | Lexeme or Pattern | Purpose |
+| --- | --- | --- |
+| `TASK` | `TASK` | Starts a task definition. |
+| `RUN` | `RUN` | Defines the script command. |
+| `EVERY` | `EVERY` | Starts a recurring schedule. |
+| `DAY` | `DAY` | Daily schedule keyword. |
+| `WEEK` | `WEEK` | Weekly schedule keyword. |
+| `ON` | `ON` | Used in weekly schedules and `DEPENDS ON`. |
+| `AT` | `AT` | Time schedule keyword. |
+| `WHEN` | `WHEN` | Event-based schedule keyword. |
+| `AFTER` | `AFTER` | Current task depends on another task. |
+| `BEFORE` | `BEFORE` | Another task depends on the current task. |
+| `DEPENDS` | `DEPENDS` | Dependency keyword. |
+| `IF` | `IF` | Starts a condition. |
+| `SUCCESS` | `success` | Success condition. |
+| `FAILURE` | `failure` | Failure condition. |
+| `MONDAY` to `SUNDAY` | day names | Weekly schedule day. |
+| `LBRACE` | `{` | Opens a task block. |
+| `RBRACE` | `}` | Closes a task block. |
+| `TIME_VAL` | `HH:MM` from `00:00` to `23:59` | Valid 24-hour time. |
+| `INVALID_TIME` | time-like invalid values such as `08:75` | Allows clear invalid-time messages. |
+| `STRING_LIT` | `"..."` | Quoted script name or command. |
+| `IDENTIFIER` | `[A-Za-z_][A-Za-z0-9_]*` | Task names and event names. |
+
+Keywords are listed before identifiers in `lexer.l`, so reserved words are tokenized correctly.
+
+## EBNF Grammar
+
+```ebnf
+program       = task_definition, { task_definition } ;
+
+task_definition
+              = "TASK", identifier, "{", { statement }, "}" ;
+
+statement     = run_statement
+              | schedule_statement
+              | dependency_statement
+              | condition_statement ;
+
+run_statement = "RUN", string_literal ;
+
+schedule_statement
+              = "EVERY", "DAY"
+              | "EVERY", "DAY", "AT", time
+              | "EVERY", "WEEK", "ON", day_of_week, "AT", time
+              | "AT", time
+              | "WHEN", identifier ;
+
+dependency_statement
+              = "AFTER", identifier
+              | "BEFORE", identifier
+              | "DEPENDS", identifier
+              | "DEPENDS", "ON", identifier ;
+
+condition_statement
+              = "IF", condition ;
+
+condition     = "success" | "failure" ;
+
+day_of_week   = "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY"
+              | "FRIDAY" | "SATURDAY" | "SUNDAY" ;
+```
+
+## BNF Grammar
+
+```bnf
+<program> ::= <task-list>
+
+<task-list> ::= <task-definition>
+              | <task-list> <task-definition>
+
+<task-definition> ::= TASK IDENTIFIER LBRACE <task-body> RBRACE
+
+<task-body> ::= <statement-list>
+              | empty
+
+<statement-list> ::= <statement>
+                   | <statement-list> <statement>
+
+<statement> ::= <run-statement>
+              | <schedule-statement>
+              | <dependency-statement>
+              | <condition-statement>
+
+<run-statement> ::= RUN STRING_LIT
+
+<schedule-statement> ::= <schedule-expr>
+
+<schedule-expr> ::= EVERY DAY
+                  | EVERY DAY AT TIME_VAL
+                  | EVERY WEEK ON <day-of-week> AT TIME_VAL
+                  | AT TIME_VAL
+                  | WHEN IDENTIFIER
+
+<dependency-statement> ::= AFTER IDENTIFIER
+                         | BEFORE IDENTIFIER
+                         | DEPENDS IDENTIFIER
+                         | DEPENDS ON IDENTIFIER
+
+<condition-statement> ::= IF <condition-clause>
+
+<condition-clause> ::= SUCCESS
+                     | FAILURE
+
+<day-of-week> ::= MONDAY
+                | TUESDAY
+                | WEDNESDAY
+                | THURSDAY
+                | FRIDAY
+                | SATURDAY
+                | SUNDAY
+```
+
+The implementation includes an empty-program parser rule only to print a clear error. Empty input is treated as invalid by the DSL.
+
+## Build Instructions
+
+Requirements:
+
+- Flex
+- Bison
+- `gcc` or `clang`
+- `make`
+- `python3` for the optional Python test runner
+
+Build:
+
+```sh
+make
+```
+
+Clean and rebuild:
+
+```sh
+make clean
+make
+```
+
+## Run Instructions
+
+Run one TaskLang++ program:
+
+```sh
+./tasklang < tests/valid_01.tl
+```
+
+Run the demo:
+
+```sh
+make demo
+```
+
+The demo shows a simple daily task, a workflow with a dependency and condition, and an event-based `WHEN` schedule.
+
+## Test Instructions
+
+Run the full test suite:
+
+```sh
+make test
+```
+
+Run the optional Python test runner:
+
+```sh
+python3 run_tests.py
+```
+
+Both test runners execute every `tests/valid_*.tl` and `tests/invalid_*.tl` file. Valid programs must exit with code `0`; invalid programs must exit with a non-zero code.
+
+## Test Coverage Matrix
+
+| Requirement | Covered By |
+| --- | --- |
+| Simple daily task | `tests/valid_01.tl` |
+| `EVERY DAY` without `AT` | `tests/valid_15.tl` |
+| `EVERY DAY AT` time | `tests/valid_01.tl`, `tests/valid_02.tl` |
+| `EVERY WEEK ON` day `AT` time | `tests/valid_03.tl` |
+| One-time `AT` schedule | `tests/valid_06.tl`, `tests/valid_09.tl` |
+| `AFTER` dependency | `tests/valid_04.tl`, `tests/valid_07.tl` |
+| `BEFORE` dependency | `tests/valid_12.tl`, `tests/valid_13.tl` |
+| `DEPENDS` and `DEPENDS ON` | `tests/valid_08.tl`, `tests/valid_11.tl` |
+| `IF success` | `tests/valid_02.tl`, `tests/valid_11.tl` |
+| `IF failure` | `tests/valid_05.tl` |
+| Multiple dependencies | `tests/valid_07.tl` |
+| Dependency chain | `tests/valid_04.tl`, `tests/valid_13.tl` |
+| `WHEN` event schedule | `tests/valid_14.tl` |
+| Comments and whitespace | `tests/valid_10.tl` |
+| Empty input rejected | `tests/invalid_18.tl` |
+| Missing `RUN` | `tests/invalid_01.tl`, `tests/invalid_17.tl` |
+| Duplicate task name | `tests/invalid_05.tl` |
+| Duplicate `RUN` | `tests/invalid_13.tl` |
+| Duplicate schedule | `tests/invalid_14.tl` |
+| Duplicate condition | `tests/invalid_15.tl` |
+| Undefined dependency | `tests/invalid_03.tl` |
+| Undefined `BEFORE` target | `tests/invalid_11.tl` |
+| Duplicate dependency | `tests/invalid_16.tl`, `tests/invalid_22.tl` |
+| Circular dependency | `tests/invalid_04.tl`, `tests/invalid_10.tl` |
+| Invalid time | `tests/invalid_07.tl` |
+| Missing closing brace | `tests/invalid_06.tl` |
+| Missing task name | `tests/invalid_02.tl` |
+| Unquoted script | `tests/invalid_08.tl` |
+| Unterminated string | `tests/invalid_09.tl` |
+| Unknown token | `tests/invalid_21.tl` |
+| Condition without dependency | `tests/invalid_19.tl` |
+| Bad `WHEN` syntax | `tests/invalid_20.tl` |
+
+Current suite size: 37 tests, with 15 valid programs and 22 invalid programs.
+
+## Semantic Validation Explanation
+
+The grammar checks whether the input has the right shape. Semantic validation checks whether the workflow makes sense after parsing.
+
+TaskLang++ validates:
+
+- missing `RUN`
+- duplicate task names
+- duplicate `RUN` statements
+- duplicate schedules
+- duplicate conditions
+- undefined dependencies
+- duplicate dependencies
+- undefined `BEFORE` targets
+- circular dependencies
+- conditions without dependencies
+- maximum task and dependency limits
+
+`BEFORE` is resolved after all tasks are parsed. If task `compileAssets` says `BEFORE packageApp`, then `packageApp` is updated to depend on `compileAssets`.
+
+Circular dependencies are found with depth-first search over the dependency graph. The error explains that the workflow cannot execute and prints the dependency chain.
+
+## Sample Valid Programs
+
+Simple daily task:
+
+```tl
+TASK dailyReport {
+    RUN "report.py"
+    EVERY DAY AT 06:00
+}
+```
+
+Daily task without a fixed time:
+
+```tl
+TASK dailyNoTime {
+    RUN "daily.sh"
+    EVERY DAY
+}
+```
+
+Event-based task:
+
+```tl
+TASK deployOnPush {
+    RUN "deploy.sh"
+    WHEN push
+}
+```
+
+Workflow with dependency and condition:
+
+```tl
 TASK backupDB {
     RUN "backup.sh"
     EVERY DAY AT 02:00
@@ -34,19 +360,48 @@ TASK backupDB {
 
 TASK sendReport {
     RUN "report.py"
-    AFTER backupDB
+    DEPENDS ON backupDB
     IF success
 }
+```
 
-TASK cleanup {
-    RUN "cleanup.sh"
-    EVERY WEEK ON SUNDAY AT 03:00
+## Sample Invalid Programs
+
+Missing `RUN`:
+
+```tl
+TASK noRun {
+    EVERY DAY AT 06:00
 }
 ```
 
-**Output:**
+Duplicate schedule:
 
+```tl
+TASK duplicateSchedule {
+    RUN "script.sh"
+    AT 08:00
+    EVERY DAY AT 09:00
+}
 ```
+
+Circular dependency:
+
+```tl
+TASK taskA {
+    RUN "a.sh"
+    AFTER taskB
+}
+
+TASK taskB {
+    RUN "b.sh"
+    AFTER taskA
+}
+```
+
+## Sample Output
+
+```text
 Parsing TaskLang++ input...
 
 --- EXECUTION START ---
@@ -54,10 +409,8 @@ Parsing TaskLang++ input...
 Executing Task: backupDB
   Script: "backup.sh"
   Schedule: EVERY DAY AT 02:00
-
-Executing Task: cleanup
-  Script: "cleanup.sh"
-  Schedule: EVERY WEEK ON SUNDAY AT 03:00
+  Depends on: (none)
+  Condition: (none)
 
 Executing Task: sendReport
   Script: "report.py"
@@ -68,139 +421,28 @@ Executing Task: sendReport
 --- EXECUTION COMPLETE ---
 ```
 
----
+## Known Limitations
 
-## Quick Start
+- Scripts are simulated and printed; they are not executed.
+- Conditions are limited to `success` and `failure`.
+- There are no retries, timeouts, monthly schedules, or date ranges.
+- String literals do not support escaped quotes.
+- The scheduler does not calculate real calendar times.
+- The implementation uses fixed-size arrays to keep the project simple.
 
-**Prerequisites:** `flex`, `bison`, `gcc`, `make`, `python3`
+## Future Improvements
 
-```bash
-# Clone
-git clone https://github.com/your-username/tasklang-plus-plus
-cd tasklang-plus-plus
+Possible future features:
 
-# Build
-make
+- `RETRY n` for retry attempts
+- `TIMEOUT HH:MM` or timeout seconds
+- monthly schedules
+- date ranges
+- named environments
+- richer conditions such as `IF backupDB.success`
+- real sandboxed script execution
+- export to cron-like formats
 
-# Run a program
-./tasklang < tests/valid_02.tl
+## Submission Notes
 
-# Run all 20 tests
-python3 run_tests.py
-```
-
----
-
-## Project Structure
-
-```
-tasklang-plus-plus/
-├── lexer.l           # Flex lexer — tokenises TaskLang++ source
-├── parser.y          # Bison parser — grammar, semantics, execution simulation
-├── Makefile          # build / run / test / clean targets
-├── run_tests.py      # automated test runner (Python 3)
-└── tests/
-    ├── valid_01.tl … valid_10.tl     # 10 valid programs
-    └── invalid_01.tl … invalid_10.tl # 10 invalid programs (correctly rejected)
-```
-
----
-
-## Language Reference
-
-### Task definition
-
-```
-TASK <name> {
-    RUN "<script>"
-    [schedule]
-    [AFTER <taskName>]
-    [IF success | IF failure]
-}
-```
-
-### Scheduling forms
-
-| Syntax | Meaning |
-|--------|---------|
-| `EVERY DAY AT HH:MM` | Run daily at a fixed time |
-| `EVERY WEEK ON <day> AT HH:MM` | Run weekly on a named day |
-| `AT HH:MM` | Run once at the specified time |
-
-Days: `MONDAY` `TUESDAY` `WEDNESDAY` `THURSDAY` `FRIDAY` `SATURDAY` `SUNDAY`
-
-### Dependencies
-
-| Keyword | Meaning |
-|---------|---------|
-| `AFTER taskName` | This task runs after the named task |
-| `BEFORE taskName` | This task runs before the named task |
-| `DEPENDS taskName` | Shorthand for `AFTER` |
-
-Multiple dependency declarations are allowed in one task.
-
-### Tokens
-
-| Token | Pattern | Description |
-|-------|---------|-------------|
-| `TASK` | `TASK` | Begins a task definition |
-| `RUN` | `RUN "..."` | Command to execute |
-| `EVERY` | `EVERY` | Recurring schedule keyword |
-| `AT` | `AT HH:MM` | Time specifier (24-hour) |
-| `AFTER` | `AFTER name` | Post-dependency |
-| `IF` | `IF success\|failure` | Conditional execution |
-| `TIME_VAL` | `([01][0-9]\|2[0-3]):[0-5][0-9]` | Valid 24-hour time |
-| `STRING_LIT` | `"[^"\n]*"` | Quoted string |
-| `IDENTIFIER` | `[a-zA-Z_][a-zA-Z0-9_]*` | Task name |
-
-Comments start with `#` and extend to end of line.
-
----
-
-## Error Handling
-
-The compiler reports three categories of errors:
-
-- **Lexical errors** — unrecognised characters, invalid time formats (e.g. `08:75`), unterminated strings
-- **Syntax errors** — missing braces, wrong keyword order, unquoted RUN operands
-- **Semantic errors** — missing `RUN` statement, undefined dependency target, duplicate task name, circular dependency
-
-Example:
-
-```
-[Semantic Error] Circular dependency detected: 'taskB' -> 'taskA' -> ... -> 'taskB'
-[Result] Parsing FAILED with 1 error(s).
-```
-
----
-
-## Test Coverage
-
-| Category | Cases | Scenarios |
-|----------|-------|-----------|
-| Valid programs | 10 | Daily/weekly/AT schedules, diamond dependency graph, failure conditions, comments, edge-case identifiers |
-| Invalid programs | 10 | Missing RUN, bad time format, undefined dep, circular dep (2-way and 3-way), duplicate name, missing brace, unquoted string, unterminated string |
-
-All 20 tests pass with correct exit codes (0 for valid, 1 for invalid).
-
----
-
-## Build Targets
-
-```bash
-make          # build the tasklang binary
-make run      # run tests/valid_01.tl
-make clean    # remove all generated files
-```
-
----
-
-## Assignment Context
-
-Built for **SE2052 – Programming Paradigms** (Y2 S2, BSc Hons Computer Science). Implements a full compiler front-end: Flex lexer + Bison parser with semantic validation and topological execution simulation.
-
----
-
-## License
-
-MIT
+Do not submit generated build artifacts such as `tasklang`, `lex.yy.c`, `parser.tab.c`, `parser.tab.h`, `parser.output`, object files, `.DS_Store`, `__MACOSX`, or `*.dSYM` directories. Run `make clean` before packaging the source code.
