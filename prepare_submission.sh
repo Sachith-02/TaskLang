@@ -72,7 +72,7 @@ unzip -l SE2052_TaskLang_Submission/tasklang_code.zip | tail -5
 echo ""
 
 echo "╔════════════════════════════════════════╗"
-echo "║  ✓ Submission Ready for Upload        ║"
+echo "║  ✓ Submission Ready for Upload         ║"
 echo "╚════════════════════════════════════════╝"
 echo ""
 echo "Submission folder: SE2052_TaskLang_Submission/"
