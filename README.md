@@ -29,7 +29,7 @@ The project demonstrates:
 | Lexer | Uses Flex rules for keywords, identifiers, strings, valid/invalid times, comments, and lexical errors. |
 | Parser | Uses Bison rules for task definitions, statements, schedules, dependencies, and conditions. |
 | Integration and Execution | Builds with `make`, validates programs, resolves dependencies, and prints simulated execution order. |
-| Testing | Includes 15 valid tests and 22 invalid tests, plus `make test` and `run_tests.py`. |
+| Testing | Includes 15 valid tests and 25 invalid tests, plus `make test` and `run_tests.py`. |
 | Reflection | Report draft explains design trade-offs, parser conflicts, semantic validation, and future work. |
 
 ## DSL Scope
@@ -210,7 +210,7 @@ The implementation includes an empty-program parser rule only to print a clear e
 Requirements:
 
 - Flex
-- Bison
+- Bison 3 or newer
 - `gcc` or `clang`
 - `make`
 - `python3` for the optional Python test runner
@@ -252,13 +252,23 @@ Run the full test suite:
 make test
 ```
 
+Run one or more named test cases:
+
+```sh
+make test valid_01
+make test valid_01 valid_02 invalid_01
+```
+
 Run the optional Python test runner:
 
 ```sh
 python3 run_tests.py
 ```
 
-Both test runners execute every `tests/valid_*.tl` and `tests/invalid_*.tl` file. Valid programs must exit with code `0`; invalid programs must exit with a non-zero code.
+Both test runners execute the selected `tests/valid_*.tl` and
+`tests/invalid_*.tl` files. Valid programs must exit with code `0`; invalid
+programs must be cleanly rejected with code `1`. Crashes and other unexpected
+exit codes fail the test suite.
 
 ## Test Coverage Matrix
 
@@ -296,8 +306,10 @@ Both test runners execute every `tests/valid_*.tl` and `tests/invalid_*.tl` file
 | Unknown token | `tests/invalid_21.tl` |
 | Condition without dependency | `tests/invalid_19.tl` |
 | Bad `WHEN` syntax | `tests/invalid_20.tl` |
+| Empty `RUN` command | `tests/invalid_23.tl`, `tests/invalid_24.tl` |
+| Overlong identifier | `tests/invalid_25.tl` |
 
-Current suite size: 37 tests, with 15 valid programs and 22 invalid programs.
+Current suite size: 40 tests, with 15 valid programs and 25 invalid programs.
 
 ## Semantic Validation Explanation
 
@@ -316,6 +328,7 @@ TaskLang++ validates:
 - circular dependencies
 - conditions without dependencies
 - maximum task and dependency limits
+- maximum identifier and string lengths
 
 `BEFORE` is resolved after all tasks are parsed. If task `compileAssets` says `BEFORE packageApp`, then `packageApp` is updated to depend on `compileAssets`.
 

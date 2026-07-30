@@ -7,13 +7,15 @@
 int yyline = 1;
 int lex_error_count = 0;
 
+#define MAX_IDENTIFIER_LENGTH 127
+#define MAX_STRING_LENGTH     255
+
 static void lex_error(const char *msg, const char *text);
 void skip_to_line_end(void);
 %}
 
 %option noyywrap
 %option nounput
-%option yylineno
 
 /* Shared patterns. TIME accepts only 00:00 through 23:59. */
 DIGIT       [0-9]
@@ -68,12 +70,18 @@ WS          [ \t]+
 
 {STRING}                {
                             int len = strlen(yytext) - 2;
+                            if (len > MAX_STRING_LENGTH)
+                                lex_error("String literal exceeds maximum "
+                                          "length of 255 characters", yytext);
                             yylval.str = strndup(yytext + 1, len);
                             return STRING_LIT;
                         }
 
  /* Identifiers are used for task names and event names such as WHEN push. */
 {IDENT}                 {
+                            if (yyleng > MAX_IDENTIFIER_LENGTH)
+                                lex_error("Identifier exceeds maximum length "
+                                          "of 127 characters", yytext);
                             yylval.str = strdup(yytext);
                             return IDENTIFIER;
                         }
@@ -83,7 +91,7 @@ WS          [ \t]+
 "}"                     { return RBRACE; }
 
  /* Whitespace */
-\n                      { yyline++; }
+\r?\n                   { yyline++; }
 
 {WS}                    { }
 

@@ -1,32 +1,115 @@
-CC      = gcc
-CFLAGS  = -Wall -Wextra -g
-BISONFLAGS = -d -v -Wconflicts-sr -Wconflicts-rr -Werror=conflicts-sr -Werror=conflicts-rr
-FLEX_PREFIX := $(shell brew --prefix flex 2>/dev/null)
-FLEX_LIB    := $(if $(FLEX_PREFIX),$(FLEX_PREFIX)/lib/libfl.a,-lfl)
-LDFLAGS     = $(FLEX_LIB)
-TARGET  = tasklang
+# TaskLang++ build
+#
+# macOS ships an old Bison (2.3), but this grammar requires Bison 3.
+# Prefer Homebrew Bison when it is installed; command-line overrides such as
+# `make BISON=/path/to/bison` still take precedence.
 
-BISON_OUT = parser.tab.c parser.tab.h
-FLEX_OUT  = lex.yy.c
+TARGET := tasklang
 
-.PHONY: all
+CC ?= cc
+FLEX ?= flex
+
+BREW_BISON := $(firstword \
+	$(wildcard /opt/homebrew/opt/bison/bin/bison) \
+	$(wildcard /usr/local/opt/bison/bin/bison))
+BISON ?= $(if $(BREW_BISON),$(BREW_BISON),bison)
+
+CFLAGS ?= -Wall -Wextra -g
+CPPFLAGS ?=
+LDFLAGS ?=
+LDLIBS ?=
+
+BISONFLAGS ?= -d -v -Wconflicts-sr -Wconflicts-rr \
+	-Werror=conflicts-sr -Werror=conflicts-rr
+FLEXFLAGS ?=
+FLEX_CFLAGS ?= -Wno-sign-compare
+
+BISON_C := parser.tab.c
+BISON_H := parser.tab.h
+BISON_REPORT := parser.output
+FLEX_C := lex.yy.c
+OBJECTS := parser.tab.o lex.yy.o
+GENERATED := $(BISON_C) $(BISON_H) $(BISON_REPORT) $(FLEX_C)
+
+RUN_FILE ?= tests/valid_01.tl
+TEST_FILES := $(sort $(wildcard tests/valid_*.tl tests/invalid_*.tl))
+TEST_CASES := $(basename $(notdir $(TEST_FILES)))
+REQUESTED_CASES := $(filter $(TEST_CASES),$(MAKECMDGOALS))
+
+.DEFAULT_GOAL := all
+.DELETE_ON_ERROR:
+
+.PHONY: all build help check-tools run demo test test-verbose clean \
+	$(TEST_CASES)
+
 all: $(TARGET)
 
-parser.tab.c parser.tab.h: parser.y
-	bison $(BISONFLAGS) parser.y
+build: all
 
-lex.yy.c: lexer.l parser.tab.h
-	flex lexer.l
+help:
+	@echo "TaskLang++ Makefile"
+	@echo ""
+	@echo "Usage:"
+	@echo "  make                  Build the TaskLang++ interpreter"
+	@echo "  make run              Run tests/valid_01.tl"
+	@echo "  make run RUN_FILE=FILE"
+	@echo "                        Run a specific TaskLang++ source file"
+	@echo "  make demo             Run three example programs"
+	@echo "  make test             Run the complete test suite"
+	@echo "  make test valid_01    Run one test case"
+	@echo "  make test valid_01 valid_02"
+	@echo "                        Run multiple test cases"
+	@echo "  make test-verbose     Run every test and show its output"
+	@echo "  make check-tools      Show the selected build tools"
+	@echo "  make clean            Remove generated files"
 
-$(TARGET): parser.tab.c lex.yy.c
-	$(CC) $(CFLAGS) -o $(TARGET) parser.tab.c lex.yy.c $(LDFLAGS)
+check-tools:
+	@command -v "$(CC)" >/dev/null 2>&1 || { \
+		echo "Error: C compiler '$(CC)' was not found."; exit 1; \
+	}
+	@command -v "$(FLEX)" >/dev/null 2>&1 || { \
+		echo "Error: Flex '$(FLEX)' was not found."; exit 1; \
+	}
+	@command -v "$(BISON)" >/dev/null 2>&1 || { \
+		echo "Error: Bison 3 was not found."; \
+		echo "On macOS, install it with: brew install bison"; exit 1; \
+	}
+	@echo "C compiler: $$($(CC) --version 2>/dev/null | head -n 1)"
+	@echo "Flex:       $$($(FLEX) --version 2>/dev/null | head -n 1)"
+	@echo "Bison:      $$($(BISON) --version 2>/dev/null | head -n 1)"
+	@echo "Bison path: $(BISON)"
 
-.PHONY: run
+$(BISON_C): parser.y
+	@$(BISON) --help 2>/dev/null | grep -q -- "--warnings" || { \
+		echo "Error: TaskLang++ requires Bison 3 or newer."; \
+		echo "Selected Bison: $(BISON)"; \
+		echo "On macOS, install it with: brew install bison"; exit 1; \
+	}
+	$(BISON) $(BISONFLAGS) parser.y
+
+# Bison creates the header together with parser.tab.c.
+$(BISON_H): $(BISON_C)
+	@test -f $@
+
+$(FLEX_C): lexer.l $(BISON_H)
+	$(FLEX) $(FLEXFLAGS) lexer.l
+
+parser.tab.o: $(BISON_C) $(BISON_H)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $(BISON_C) -o $@
+
+lex.yy.o: $(FLEX_C) $(BISON_H)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(FLEX_CFLAGS) -c $(FLEX_C) -o $@
+
+$(TARGET): $(OBJECTS)
+	$(CC) $(LDFLAGS) -o $@ $(OBJECTS) $(LDLIBS)
+
 run: $(TARGET)
-	@echo "=== Running tests/valid_01.tl ==="
-	@./$(TARGET) < tests/valid_01.tl
+	@test -f "$(RUN_FILE)" || { \
+		echo "Error: input file '$(RUN_FILE)' does not exist."; exit 1; \
+	}
+	@echo "=== Running $(RUN_FILE) ==="
+	@./$(TARGET) < "$(RUN_FILE)"
 
-.PHONY: demo
 demo: $(TARGET)
 	@echo "=== Demo: Simple Daily Task ==="
 	@./$(TARGET) < tests/valid_01.tl
@@ -37,51 +120,24 @@ demo: $(TARGET)
 	@echo "=== Demo: Event-Based Schedule ==="
 	@./$(TARGET) < tests/valid_14.tl
 
-.PHONY: test
 test: $(TARGET)
-	@echo ""
-	@echo "╔══════════════════════════════════════╗"
-	@echo "║   TaskLang++ Test Suite              ║"
-	@echo "╚══════════════════════════════════════╝"
-	@echo ""
-	@PASS=0; FAIL=0; \
-	echo "── VALID PROGRAMS (expect exit 0) ──────────────────"; \
-	for f in tests/valid_*.tl; do \
-		./$(TARGET) < "$$f" > /dev/null 2>&1; \
-		if [ $$? -eq 0 ]; then \
-			echo "  [PASS]  $$f"; PASS=$$((PASS+1)); \
-		else \
-			echo "  [FAIL]  $$f  <-- should have passed"; FAIL=$$((FAIL+1)); \
-		fi; \
-	done; \
-	echo ""; \
-	echo "── INVALID PROGRAMS (expect exit 1) ────────────────"; \
-	for f in tests/invalid_*.tl; do \
-		./$(TARGET) < "$$f" > /dev/null 2>&1; \
-		if [ $$? -ne 0 ]; then \
-			echo "  [PASS]  $$f  (correctly rejected)"; PASS=$$((PASS+1)); \
-		else \
-			echo "  [FAIL]  $$f  <-- should have failed"; FAIL=$$((FAIL+1)); \
-		fi; \
-	done; \
-	echo ""; \
-	echo "────────────────────────────────────────────────────"; \
-	echo "  Results: $$PASS passed, $$FAIL failed"; \
-	echo ""; \
-	[ $$FAIL -eq 0 ]
+	@python3 run_tests.py $(REQUESTED_CASES)
 
-.PHONY: test-verbose
+# These aliases allow commands such as `make test valid_01 invalid_01`.
+$(TEST_CASES): test
+	@:
+
 test-verbose: $(TARGET)
-	@for f in tests/valid_*.tl tests/invalid_*.tl; do \
+	@for file in tests/valid_*.tl tests/invalid_*.tl; do \
 		echo ""; \
 		echo "══════════════════════════════════════════"; \
-		echo "  FILE: $$f"; \
+		echo "  FILE: $$file"; \
 		echo "══════════════════════════════════════════"; \
-		./$(TARGET) < "$$f"; \
-		echo "(exit code: $$?)"; \
+		./$(TARGET) < "$$file"; \
+		status=$$?; \
+		echo "(exit code: $$status)"; \
 	done
 
-.PHONY: clean
 clean:
-	rm -f $(TARGET) $(BISON_OUT) $(FLEX_OUT) parser.output
-	rm -rf $(TARGET).dSYM
+	$(RM) $(TARGET) $(GENERATED) *.o
+	$(RM) -r $(TARGET).dSYM __pycache__

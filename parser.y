@@ -7,7 +7,7 @@
 #define MAX_DEPS    16
 #define MAX_NAME    128
 #define MAX_SCRIPT  256
-#define MAX_SCHED   128
+#define MAX_SCHED   160
 #define MAX_COND    64
 
 typedef struct {
@@ -29,6 +29,7 @@ static int   parse_errors = 0;
 
 static char  cur_name[MAX_NAME];
 static char  cur_script[MAX_SCRIPT];
+static int   cur_run_seen;
 static char  cur_schedule[MAX_SCHED];
 static char  cur_deps[MAX_DEPS][MAX_NAME];
 static int   cur_dep_count;
@@ -64,6 +65,8 @@ static void print_task(const Task *t);
     char *str;
 }
 
+%destructor { free($$); } <str>
+
 %token YYEOF 0 "end of file"
 %token TASK RUN EVERY DAY WEEK ON AFTER BEFORE DEPENDS IF WHEN
 %token SUCCESS FAILURE LBRACE RBRACE
@@ -98,10 +101,10 @@ task_list
 
 task_definition
     : TASK IDENTIFIER LBRACE
-        { begin_task($2); free($2); }
+        { begin_task($2); }
       task_body
       RBRACE
-        { end_task(); }
+        { end_task(); free($2); }
 
     | TASK error RBRACE
         {
@@ -363,6 +366,7 @@ static void begin_task(const char *name)
     strncpy(cur_name, name, MAX_NAME - 1);
     cur_name[MAX_NAME - 1] = '\0';
     cur_script[0]   = '\0';
+    cur_run_seen    = 0;
     cur_schedule[0] = '\0';
     cur_dep_count   = 0;
     cur_before_count = 0;
@@ -379,7 +383,7 @@ static void end_task(void)
         return;
     }
 
-    if (cur_script[0] == '\0') {
+    if (!cur_run_seen) {
         fprintf(stderr,
             "[Semantic Error] Task '%s' is missing a RUN statement.\n",
             cur_name);
@@ -420,13 +424,23 @@ static void end_task(void)
 
 static void set_script(const char *s)
 {
-    if (cur_script[0] != '\0') {
+    if (cur_run_seen) {
         fprintf(stderr,
             "[Semantic Error] Task '%s' has more than one RUN statement.\n",
             cur_name);
         parse_errors++;
         return;
     }
+
+    cur_run_seen = 1;
+    if (s[0] == '\0') {
+        fprintf(stderr,
+            "[Semantic Error] Task '%s' has an empty RUN command.\n",
+            cur_name);
+        parse_errors++;
+        return;
+    }
+
     strncpy(cur_script, s, MAX_SCRIPT - 1);
     cur_script[MAX_SCRIPT - 1] = '\0';
 }
@@ -612,10 +626,16 @@ static int dfs_cycle(int idx)
         if (dep_idx < 0) continue;
 
         if (!tasks[dep_idx].visited) {
-            if (dfs_cycle(dep_idx)) return 1;
+            if (dfs_cycle(dep_idx)) {
+                cycle_depth--;
+                t->in_stack = 0;
+                return 1;
+            }
         } else if (tasks[dep_idx].in_stack) {
             print_cycle_path(dep_idx);
             cycle_found = 1;
+            cycle_depth--;
+            t->in_stack = 0;
             return 1;
         }
     }
